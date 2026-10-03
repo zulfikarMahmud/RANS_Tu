@@ -1,0 +1,41 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+// Force coefficients on the E387 airfoil.  IDENTICAL in all paper cases --
+// nothing here is model-specific, so any difference between cases would be a
+// setup error, not physics.
+//   2D case, 1-cell span -> Aref = chord * span = 1 * 1 = 1 (per-metre-span)
+//   incompressible (kinematic p) -> rho = rhoInf = 1
+//   alpha = 0 deg -> lift = y, drag = x (rotate liftDir/dragDir if AoA changes)
+//
+// writeControl timeStep is DELIBERATE: the E387 laminar separation bubble
+// limit-cycles (Cl swings tens of percent peak-to-peak), and sampling Cl/Cd
+// only at write times hides that entirely.  Every iteration is needed to judge
+// whether an averaging window is long enough.
+
+// liftDir/dragDir are derived from alpha in caseSettings -- see there.
+#include        "$FOAM_CASE/0/include/caseSettings"
+
+type            forceCoeffs;
+libs            ("libforces.so");
+
+writeControl    timeStep;       // every iteration -- see note above
+
+patches         (airfoil);
+
+rho             rhoInf;
+rhoInf          1;              // incompressible: kinematic p, rho = 1
+magUInf         3;              // Re = 200k at c = 1 m, nu = 1.5e-5
+lRef            1;              // chord
+Aref            1;              // chord * span
+
+liftDir         $liftDirV;
+dragDir         $dragDirV;
+CofR            (0.25 0 0);     // quarter-chord
+pitchAxis       (0 0 1);
+
+// ************************************************************************* //

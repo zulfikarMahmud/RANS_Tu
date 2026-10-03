@@ -1,0 +1,28 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+|  Post-processing: sample the TIME-AVERAGED surface fields onto the airfoil.   |
+|                                                                              |
+|  Run AFTER the solve (means exist only then):                                 |
+|      postProcess -func sampleMeans -latestTime                                 |
+|                                                                              |
+|  Produces  postProcessing/sampleMeans/<time>/airfoilSurf.xy  with columns     |
+|      x y z  pMean  wallShearStressMean(x,y,z)                                  |
+|  -> mean Cp = pMean/(0.5 U^2) ; mean Cf from wallShearStressMean_x            |
+|  -> mean LS / T / TR (correct for a limit-cycling / unsteady solution).       |
+\*---------------------------------------------------------------------------*/
+
+type            surfaces;
+libs            ( "libsampling.so" );
+surfaceFormat   raw;
+interpolationScheme cell;
+fields          ( pMean wallShearStressMean );
+surfaces
+{
+    airfoilSurf
+    {
+        type            patch;
+        patches         ( airfoil );
+        interpolate     false;
+    }
+}
+
+// ************************************************************************* //

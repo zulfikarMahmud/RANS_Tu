@@ -1,0 +1,82 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+|  Tu-parameterised freestream settings — kOmegaSSTLM, E387                    |
+|                                                                              |
+|  >>> CHANGE Tu (and, if needed, Uinf) IN THE "USER INPUT" BLOCK ONLY. <<<     |
+|  Everything below it is derived automatically, so a Tu sweep needs exactly   |
+|  ONE edit per case.                                                          |
+|                                                                              |
+|  Included by 0/k, 0/omega, 0/nut, 0/ReThetat, 0/U                            |
+\*---------------------------------------------------------------------------*/
+
+// ======================= USER INPUT ==========================================
+
+Tu              0.1;        // freestream turbulence intensity  [%]
+Uinf            3;          // freestream velocity              [m/s]  (Re=200k @ c=1m)
+alpha           0;          // angle of attack [deg]   <-- SWEEP THIS
+nuValue         1.5e-5;     // kinematic viscosity              [m2/s]
+ratioRef        10;         // nut/nu at the reference Tu
+TuRef           0.1;        // reference Tu [%]  (nutRatio = ratioRef*Tu/TuRef)
+nutRatio        #calc "${ratioRef}*scalar(${Tu})/scalar(${TuRef})";  // scales with Tu
+                            //  -> omega_amb ~ Tu (not Tu^2), so the sustaining
+                            //     omega-source ~ Tu^2 (not Tu^4): survives high Tu
+
+// ======================= DERIVED — DO NOT EDIT ===============================
+
+// turbulence intensity as a fraction
+TuFrac          #calc "${Tu}/100.0";
+
+// k = 3/2 (Uinf * Tu)^2
+// scalar(...) wraps force floating point: a #calc result that lands on a whole
+// number (e.g. omega=225 at Tu=5%) is written as "225" and Foam::sqr(225) is an
+// ambiguous int overload -> compile error. scalar() makes it 225.0 -> unambiguous.
+kInlet          #calc "1.5*Foam::sqr(scalar(${Uinf})*scalar(${TuFrac}))";
+
+// nut = (nut/nu) * nu   [Tu-independent, but kept here so omega stays consistent]
+nutInlet        #calc "${nutRatio}*${nuValue}";
+
+// omega = k / nut
+omegaInlet      #calc "${kInlet}/${nutInlet}";
+
+// Langtry-Menter transition-onset correlation (Tu in PERCENT).
+// Matches OpenFOAM's internal ReThetat correlation (kOmegaSSTLM.C):
+//   Tu <= 1.3 :  1173.51 - 589.428*Tu + 0.2196/Tu^2
+//   Tu >  1.3 :  331.50*(Tu - 0.5658)^-0.671
+ReThetatInlet   #calc "${Tu} <= 1.3 ? 1173.51 - 589.428*${Tu} + 0.2196/Foam::sqr(scalar(${Tu})) : 331.50*Foam::pow(scalar(${Tu}) - 0.5658, -0.671)";
+
+// freestream velocity vector
+// --- angle of attack ---------------------------------------------------------
+// The mesh is NOT rotated; the freestream vector is.  liftDir/dragDir must
+// rotate with it, because lift is perpendicular to the FREESTREAM, not to the
+// chord -- leaving them at (0 1 0)/(1 0 0) leaks lift into drag.
+// |Uinlet| == Uinf at every alpha, so kInlet/omegaInlet/nutInlet are unchanged.
+// scalar(...) is REQUIRED throughout: a #calc result landing on a whole number
+// (alpha=0 -> alphaRad=0, cosA=1, sinA=0) is written without a decimal point,
+// and Foam::cos(0) is then an ambiguous int overload -> compile error.
+alphaRad        #calc "scalar(${alpha})*constant::mathematical::pi/180.0";
+cosA            #calc "Foam::cos(scalar(${alphaRad}))";
+sinA            #calc "Foam::sin(scalar(${alphaRad}))";
+
+Uinlet          ( #calc "scalar(${Uinf})*scalar(${cosA})" #calc "scalar(${Uinf})*scalar(${sinA})" 0 );
+liftDirV        ( #calc "-scalar(${sinA})"                #calc "scalar(${cosA})"                 0 );
+dragDirV        ( #calc "scalar(${cosA})"                 #calc "scalar(${sinA})"                 0 );
+
+// --- Sustaining (ambient) source terms — Spalart & Rumsey, AIAA J 45(10) 2007 --
+// Cancel the freestream decay of k and omega by adding a constant source equal
+// to the SST destruction evaluated at the ambient (inlet) values:
+//   S_k     = betaStar * omega_inf * k_inf        (k-eqn destruction  = betaStar*omega*k)
+//   S_omega = beta2    * omega_inf^2              (omega-eqn destruction = beta*omega^2)
+// beta2 (=0.0828) is the freestream blend value (F1 -> 0 far from walls).
+// Applied via constant/fvModels (semiImplicitSource, volumeMode specific = per m3).
+betaStar        0.09;       // SST k-destruction coefficient (constant)
+beta2           0.0828;     // SST omega-destruction coefficient, freestream (F1=0)
+
+SkSustain       #calc "${betaStar}*${omegaInlet}*${kInlet}";
+SomegaSustain   #calc "${beta2}*Foam::sqr(scalar(${omegaInlet}))";
+
+// ---- Reference values produced at Tu = 0.1 %, Uinf = 3 (sanity check) -------
+//      kInlet = 1.35e-05    nutInlet = 1.5e-04
+//      omegaInlet = 0.09    ReThetatInlet = 1136.53
+//      SkSustain = 1.0935e-07    SomegaSustain = 6.7068e-04
+// -----------------------------------------------------------------------------
+
+// ************************************************************************* //

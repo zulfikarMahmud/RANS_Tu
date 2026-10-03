@@ -1,0 +1,117 @@
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      fvModels;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+//  Strain-gated sustaining turbulence for kOmegaSSTLM (SST-2003 base).
+//  Notation & method: Zhang, Nie, Meng & Zuo, Energies 2022, 15, 6491
+//    - ambient values   k_amb, w_amb                         Eq. (25)
+//    - ambient sources  P_k_amb = betaStar*k_amb*w_amb       Eq. (26)
+//                       P_w_amb = beta*w_amb^2               Eq. (27)
+//    - strain-rate switch: activate ONLY where  nu*S^2 < gammaInt^3 * P_k_amb
+//      => ON in the freestream (S~0), OFF in the boundary layer (S large)  Eq. (28)
+//  (additive form of Eq.28; equals max(P_ori,P_amb) where the switch is ON,
+//   since production is ~0 in the freestream.  Spalart & Rumsey AIAA 2007.)
+//  All ambient values DERIVE from Tu in 0/include/caseSettings (single-edit sweep).
+//
+//  WHAT ELSE WAS TRIED, AND WHY IT IS NOT USED
+//
+//  1. NO STRAIN SWITCH (source active everywhere). Rejected: the ambient
+//     source then feeds the boundary layer as well as the freestream, which
+//     is precisely what it must not do. The switch confines it to regions
+//     where the real strain production is weaker than the ambient level.
+//
+//  2. KATO-LAUNDER limiter (Pk = nut*S*Omega) implemented as a coded fvModel,
+//     to curb stagnation-point over-production instead of tightening c1.
+//     Rejected: an fvModel can only ADD a source, so the correction had to be
+//     applied as an explicit NEGATIVE term. At the stagnation point that sink
+//     reached ~10x the k-equation's own destruction rate, drove k negative,
+//     and diverged (1546 k-bounding events, k min -76078 in one case). The
+//     failure is an artefact of the explicit additive formulation, not of
+//     Kato-Launder itself -- the published form replaces the production term
+//     inside the model, which is not reachable without editing source code.
+//     Menter's c1 limiter was used instead: it is a min() on a native,
+//     always-positive term and cannot produce this failure mode.
+//
+//  3. LOWERING ratioRef to reduce the ambient eddy viscosity. Rejected: it
+//     RAISES omega_amb (k_amb/nut_amb), and the omega-source goes as
+//     omega_amb^2. One trial gave |dCp| = 1.47 and a NEGATIVE drag.
+//
+//  Ambient values derive from Tu in 0/include/caseSettings -- a sweep is a
+//  single-line edit there, and nothing in this file needs touching.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include        "../0/include/caseSettings"
+
+sustainK
+{
+    type            coded;
+    name            sustainK;
+    field           k;
+    cellZone        all;
+    codeInclude     #{ #include "fvcGrad.H" #};
+    codeAddSup
+    #{
+        const scalar betaStar = $betaStar;
+        const scalar nu       = $nuValue;
+        const scalar k_amb    = $kInlet;                 // Eq.25
+        const scalar w_amb    = $omegaInlet;             // Eq.25
+        const scalar P_k_amb  = betaStar*k_amb*w_amb;    // Eq.26
+
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+        const volScalarField& gammaInt =
+            mesh().lookupObject<volScalarField>("gammaInt");
+        tmp<volScalarField> tS = sqrt(2.0*magSqr(symm(fvc::grad(U))));  // S = sqrt(2 Sij Sij)
+        const volScalarField& S = tS();
+
+        const scalarField& V = mesh().V();
+        scalarField& src = eqn.source();
+        forAll(src, i)
+        {
+            if (nu*sqr(S[i]) < pow(gammaInt[i], 3)*P_k_amb)   // Eq.28 switch
+            {
+                src[i] -= P_k_amb*V[i];
+            }
+        }
+    #};
+}
+
+sustainOmega
+{
+    type            coded;
+    name            sustainOmega;
+    field           omega;
+    cellZone        all;
+    codeInclude     #{ #include "fvcGrad.H" #};
+    codeAddSup
+    #{
+        const scalar betaStar = $betaStar;
+        const scalar beta     = $beta2;
+        const scalar nu       = $nuValue;
+        const scalar k_amb    = $kInlet;                 // Eq.25
+        const scalar w_amb    = $omegaInlet;             // Eq.25
+        const scalar P_k_amb  = betaStar*k_amb*w_amb;    // Eq.26 (used for the shared switch)
+        const scalar P_w_amb  = beta*w_amb*w_amb;        // Eq.27
+
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+        const volScalarField& gammaInt =
+            mesh().lookupObject<volScalarField>("gammaInt");
+        tmp<volScalarField> tS = sqrt(2.0*magSqr(symm(fvc::grad(U))));
+        const volScalarField& S = tS();
+
+        const scalarField& V = mesh().V();
+        scalarField& src = eqn.source();
+        forAll(src, i)
+        {
+            if (nu*sqr(S[i]) < pow(gammaInt[i], 3)*P_k_amb)   // Eq.28 switch (same condition)
+            {
+                src[i] -= P_w_amb*V[i];
+            }
+        }
+    #};
+}
+
+// ************************************************************************* //
