@@ -1,0 +1,72 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+|  Freestream settings — kkLOmega (k-kL-omega), E387  —  Tu-SWEEP (STEADY)       |
+|                                                                              |
+|  Steady SIMPLE companion to kkoHybridTu. Tu SWEEP: change ONLY Tu in the       |
+|  USER INPUT block. The eddy-viscosity ratio scales with Tu                     |
+|  (nut/nu = ratioRef * Tu/TuRef) = holding the freestream turbulent LENGTH      |
+|  SCALE constant across the sweep (nut/nu = Cmu^0.25 * Lt * sqrt(k)/nu,         |
+|  sqrt(k) ~ Tu). Edit Tu in a TEXT EDITOR (foamDictionary -set strips these     |
+|  comments).                                                                   |
+|                                                                              |
+|  Anchor: nut/nu = 10 at Tu = 0.1 % -> the Tu = 0.1 point reproduces the        |
+|  validated kkoSteady baseline.                                                |
+|                                                                              |
+|  Included by 0/kt, 0/kl, 0/omega, 0/nut, 0/U                                  |
+\*---------------------------------------------------------------------------*/
+
+// ======================= USER INPUT ==========================================
+
+Tu              0.1345;     // BACK-CALCULATED inlet value. Stock kkLOmega ignores
+                            // fvModels, so it cannot sustain: 0.1345% at the
+                            // inlet decays to 0.1009% at x=-0.5c, matching the
+                            // 0.1001% the sustained models hold at Tu=0.1.
+                            // DO NOT set this to 0.1 -- that would give a
+                            // different effective freestream than the others.
+Uinf            3;          // freestream velocity              [m/s] (Re=200k @ c=1m)
+alpha           0;          // angle of attack [deg]   <-- SWEEP THIS
+nuValue         1.5e-5;     // kinematic viscosity              [m2/s]
+
+// --- eddy-viscosity-ratio anchor (set once; defines the fixed length scale) ---
+ratioRef        10;         // nut/nu at the reference Tu
+TuRef           0.1;        // reference Tu [%]  -> nut/nu = 10 at Tu = 0.1 %
+
+// ======================= DERIVED — DO NOT EDIT ===============================
+
+TuFrac          #calc "${Tu}/100.0";
+
+// eddy-viscosity ratio scales linearly with Tu (fixed freestream length scale)
+nutRatio        #calc "${ratioRef}*scalar(${Tu})/scalar(${TuRef})";
+
+// kt = 3/2 (Uinf * Tu)^2 ; scalar(...) forces float (Foam::sqr(int) is ambiguous)
+kInlet          #calc "1.5*Foam::sqr(scalar(${Uinf})*scalar(${TuFrac}))";
+
+nutInlet        #calc "${nutRatio}*${nuValue}";        // nut = (nut/nu) * nu
+omegaInlet      #calc "${kInlet}/${nutInlet}";         // omega = kt / nut
+// --- angle of attack ---------------------------------------------------------
+// The mesh is NOT rotated; the freestream vector is.  liftDir/dragDir must
+// rotate with it, because lift is perpendicular to the FREESTREAM, not to the
+// chord -- leaving them at (0 1 0)/(1 0 0) leaks lift into drag.
+// |Uinlet| == Uinf at every alpha, so kInlet/omegaInlet/nutInlet are unchanged.
+// scalar(...) is REQUIRED throughout: a #calc result landing on a whole number
+// (alpha=0 -> alphaRad=0, cosA=1, sinA=0) is written without a decimal point,
+// and Foam::cos(0) is then an ambiguous int overload -> compile error.
+alphaRad        #calc "scalar(${alpha})*constant::mathematical::pi/180.0";
+cosA            #calc "Foam::cos(scalar(${alphaRad}))";
+sinA            #calc "Foam::sin(scalar(${alphaRad}))";
+
+Uinlet          ( #calc "scalar(${Uinf})*scalar(${cosA})" #calc "scalar(${Uinf})*scalar(${sinA})" 0 );
+liftDirV        ( #calc "-scalar(${sinA})"                #calc "scalar(${cosA})"                 0 );
+dragDirV        ( #calc "scalar(${cosA})"                 #calc "scalar(${sinA})"                 0 );
+
+// ---- Sweep sanity values (Uinf = 3, ratioRef = 10, TuRef = 0.1) -------------
+//   Tu[%]   nutRatio   kInlet       nutInlet     omegaInlet
+//   0.1       10       1.35e-05     1.5e-04      0.09     (== validated baseline)
+//   0.5       50       3.375e-04    7.5e-04      0.45
+//   1.0      100       1.35e-03     1.5e-03      0.90
+//   2.0      200       5.40e-03     3.0e-03      1.80
+//   5.0      500       3.375e-02    7.5e-03      4.50
+//   (kl is initialised to 0 everywhere: laminar KE is a boundary-layer quantity,
+//    not a freestream one, so it does not scale with Tu.)
+// -----------------------------------------------------------------------------
+
+// ************************************************************************* //

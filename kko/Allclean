@@ -1,0 +1,23 @@
+#!/bin/sh
+cd "${0%/*}" || exit 1    # run from this case directory
+
+# --- Fresh-start cleanup -----------------------------------------------------
+# Removes everything produced by a previous run, so averaging (pMean/UMean)
+# starts with NO leftover state. Preserves:
+#   0/                 initial fields (foamListTimes never lists 0)
+#   constant/          including the imported mesh in constant/polyMesh
+#   system/            dictionaries
+# -----------------------------------------------------------------------------
+
+rm -rf processor*          # parallel decomposition (mesh copies + time dirs)
+rm -rf postProcessing      # probe / yPlus function-object output
+foamListTimes -rm          # all result time dirs > 0  (keeps 0/, constant, system)
+rm -f  log.*               # run logs
+rm -rf dynamicCode         # compiled #calc code from 0/include/caseSettings
+
+# Windows/WSL alternate-data-stream junk (":Zone.Identifier"), anywhere in the case
+find . -name '*Zone.Identifier*' -type f -delete 2>/dev/null
+
+echo "Clean done. Kept: 0/, constant/ (mesh), system/."
+echo "Verify no stale average state:"
+ls 0/ | grep -i mean && echo "  WARNING: Mean field left in 0/ - delete it!" || echo "  0/ has no Mean fields (good)."

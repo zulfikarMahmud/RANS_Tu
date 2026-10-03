@@ -1,0 +1,88 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format          ascii;
+    class           dictionary;
+    location        "system";
+    object          fvSchemes;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    // cellLimited 0.9, NOT plain Gauss linear and NOT cellLimited 1.
+    //   - unlimited Gauss linear overshoots on the stretched near-wall cells of
+    //     this mesh and lets the turbulence fields go negative;
+    //   - cellLimited 1 (full limiting) is stable but over-diffuses the
+    //     separation bubble, which is the feature being measured.
+    // 0.9 was the compromise used throughout the published sweep.
+    //
+    // NOTE: Allrun OVERRIDES this per phase. Phase 0 (the cold start) runs
+    // plain "Gauss linear" because cellLimited on a uniform initial field is
+    // itself a documented FPE trigger in this family of cases; phases 1-2 run
+    // the value below. Editing this line alone therefore changes nothing --
+    // edit GRADS_PHASE1 / GRADS_PHASE2 in Allrun.
+    default         cellLimited Gauss linear 0.9;
+}
+
+divSchemes
+{
+    // MOMENTUM: linearUpwind (2nd order, gradient-corrected). Plain upwind is
+    // far too diffusive here -- it smears the separation bubble that the whole
+    // study is about.
+    //
+    // TURBULENCE: limitedLinear 1 -- 2nd order where the field is smooth,
+    // falling back toward upwind near steep gradients. Unlimited linear on the
+    // turbulence fields drives k (or kt) NEGATIVE on this mesh; OpenFOAM then
+    // clips the negative value to zero, nut collapses, the local gradients
+    // steepen, and the next iteration overshoots harder -- a runaway that ends
+    // in a floating-point exception inside the linear solver. That failure was
+    // observed repeatedly during development.
+    //
+    // WHAT ALLRUN DOES DIFFERENTLY ON THE COLD START. Even limitedLinear /
+    // linearUpwind can trigger the runaway above during the first few hundred
+    // iterations, when the field is still uniform and the gradients are
+    // meaningless. Allrun therefore runs phase 0 (0 -> 1000) with a more
+    // robust turbulence convection scheme and only then switches to the values
+    // below. See DIV_TURB_PHASE1 / DIV_TURB_PHASE2 in Allrun.
+    default         none;
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,kt)     bounded Gauss limitedLinear 1;
+    div(phi,kl)     bounded Gauss limitedLinear 1;
+    div(phi,omega)  bounded Gauss limitedLinear 1;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+
+
+// ************************************************************************* //

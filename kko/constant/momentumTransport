@@ -1,0 +1,55 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      momentumTransport;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+simulationType RAS;
+
+RAS
+{
+    model           kkLOmega;
+
+    turbulence      on;
+    printCoeffs     on;
+
+    // WHY c1 IS NOT OVERRIDDEN HERE (the sst case sets c1 = 5)
+    //
+    // This model derives from kOmegaSST, so Menter's production limiter
+    //     Pk = min(G, c1*betaStar*k*omega)
+    // exists here too and runs at the library default c1 = 10.
+    //
+    // Plain kOmegaSST needed it tightened to 5: with no intermittency field it
+    // over-produces k at the stagnation point, and at higher freestream
+    // turbulence that grew until the cold start diverged. Tightening c1 to 5
+    // fixed it (the limiter then binds at S > 0.671*omega, against ~0.300*omega
+    // for an equilibrium turbulent boundary layer -- a 2.24x margin, so the
+    // boundary layer itself is untouched).
+    //
+    // THIS model multiplies production by the intermittency before the limiter
+    // can matter, and gammaInt is near zero in the laminar region containing
+    // the stagnation point -- so the anomaly never appears. Changing c1 here
+    // would also silently perturb the transition correlations, which were
+    // calibrated against standard SST with c1 = 10. Left at the default
+    // deliberately.
+    //
+    // NOTE: c1 must sit in the RAS dict, NOT in the *Coeffs subdict below.
+    // OpenFOAM 13 resolves coeffDict() via optionalSubDict(type()+"Coeffs"),
+    // which SILENTLY falls back to the parent dict -- a c1 written inside the
+    // Coeffs block is never read. Verified: c1 = 0.5 vs 10 inside the subdict
+    // gave bit-identical residuals.
+
+}
+
+
+// ************************************************************************* //
