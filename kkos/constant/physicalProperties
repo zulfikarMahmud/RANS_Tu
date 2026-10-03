@@ -1,0 +1,26 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      physicalProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+// IDENTICAL in all paper cases.  "viscosityModel constant" is the OpenFOAM 13
+// keyword; "transportModel Newtonian" is the pre-v11 legacy form and is only
+// still accepted for backwards compatibility.
+//
+// nu = 1.5e-05 m2/s with Uinf = 3 m/s and c = 1 m  ->  Re = 200 000.
+
+viscosityModel  constant;
+
+nu              1.5e-05;
+
+// ************************************************************************* //

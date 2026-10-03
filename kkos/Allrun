@@ -1,0 +1,144 @@
+#!/bin/bash
+cd "${0%/*}" || exit 1        # run from this case directory
+set -o pipefail               # make 'cmd | tee' report cmd's exit status, not tee's
+# =============================================================================
+#  kkLOmega (Walters & Cokljat k-kL-omega) -- E387, Re=200k, alpha=0, Tu=0.1 %.
+#
+#  Three-phase fresh start, IDENTICAL in structure to the lm / sst / ysst cases
+#  so that model-to-model differences are not confounded with numerics.
+#
+#    Phase 0:  0 -> SAFE_START         robust startup schemes, averaging OFF
+#    Phase 1:  SAFE_START -> AVG_START production schemes,     averaging OFF
+#    Phase 2:  AVG_START -> END        production schemes,     averaging ON
+#              (restartOnRestart zeroes the average at the AVG_START restart, so
+#               pMean/UMean are the dense mean over [AVG_START, END].)
+#
+#  Requires (already set in system/controlDict):
+#    startFrom latestTime  ;  functions/fieldAverage/restartOnRestart true
+#  Run ./Allclean first (decomposePar has no -force and needs a clean case).
+# =============================================================================
+
+SAFE_START=1000                # phase 0 length: robust schemes only for the cold start
+AVG_START=5000
+END=10000
+NP=8                          # must match numberOfSubdomains in decomposeParDict
+
+# Gradient scheme per phase. Phase 0 MUST stay a plain (unlimited) scheme:
+# cellLimited on a cold uniform start is the documented FPE trigger in this
+# family of cases. Phase 1/2 run on an already-developed field, where it is safe.
+GRADS_PHASE1="Gauss linear"
+GRADS_PHASE2="cellLimited Gauss linear 0.9"
+# Turbulence div schemes per phase. Phase 0 linearUpwind = bulletproof cold
+# start; phase 1/2 = 2nd-order limited for the production/averaged window.
+# ---- PHASE 0 TURBULENCE CONVECTION SCHEME ----------------------------------
+# 2nd-order linearUpwind is retained here because this model survived the cold
+# start with it throughout the published sweep.
+#
+# IF THIS CASE CRASHES WITH A FLOATING-POINT EXCEPTION during phase 0, or the
+# log fills with "bounding k" / "bounding kt" showing large NEGATIVE minima,
+# that is the known cold-start runaway: the gradient correction drives the
+# turbulence variable negative, OpenFOAM clips it to zero, nut collapses, and
+# the next iteration overshoots harder. THE FIX is to change the line below to
+#
+#     DIV_TURB_PHASE1="bounded Gauss upwind"
+#
+# First-order upwind is unconditionally bounded and cannot create the negative
+# excursion. It costs no accuracy: phase 0 is iterations 0 -> 1000 only and is
+# discarded long before the averaging window; phases 1-2 are untouched. This is
+# exactly what the sst case does, and what two kkLOmega cases in the sweep
+# needed at high freestream turbulence.
+DIV_TURB_PHASE1="bounded Gauss linearUpwind grad"
+DIV_TURB_PHASE2="bounded Gauss limitedLinear 1"
+
+die () {
+    echo
+    echo "############################################################"
+    echo "## STOPPED: $1"
+    echo "############################################################"
+    exit 1
+}
+
+# --- locate helper scripts WITHOUT hard-coded relative depth ------------------
+# Walks up from this case directory until it finds the file, so the case can be
+# moved, copied or nested (e.g. duplicated for a Tu sweep) without editing paths.
+find_up () {
+    d="$PWD"
+    while [ "$d" != "/" ]; do
+        [ -f "$d/$1" ] && { echo "$d/$1"; return 0; }
+        d=$(dirname "$d")
+    done
+    return 1
+}
+
+[ "$AVG_START" -lt "$END" ] || die "AVG_START ($AVG_START) must be < END ($END)."
+
+caseName="${PWD##*/}"
+touch "${caseName}.foam"      # ParaView marker
+
+cd_entry () { foamDictionary system/controlDict -entry "$1" -set "$2" >/dev/null; }
+set_grad () { foamDictionary system/fvSchemes -entry "gradSchemes/default" -set "$1" >/dev/null; }
+set_divturb () {
+    # kkLOmega transports kt, kl and omega -- there is no k and no gammaInt.
+    for v in kt kl omega; do
+        foamDictionary system/fvSchemes -entry "divSchemes/div(phi,$v)" -set "$1" >/dev/null
+    done
+}
+
+# --- mesh & decomposition ----------------------------------------------------
+checkMesh 2>&1 | tee log.checkMesh
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "checkMesh did not run. See log.checkMesh."
+grep -q "Mesh OK" log.checkMesh || die "checkMesh reported mesh problems. See log.checkMesh."
+
+decomposePar 2>&1 | tee log.decomposePar
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "decomposePar failed (processor* already exist? run ./Allclean)."
+
+# --- record the initial/inlet values this run is built on -------------------
+# Writes log.initialValues: the #calc-resolved numbers AND an independent
+# re-derivation, so the automatic chain can be checked by hand.
+INIT_SH=$(find_up showInitialValues.sh) \
+  && bash "$INIT_SH" . >/dev/null \
+  || echo "(showInitialValues.sh not found above $PWD -- skipped)"
+
+# --- Phase 0: 0 -> SAFE_START, robust startup schemes ------------------------
+cd_entry endTime "$SAFE_START"
+cd_entry "functions/fieldAverage/enabled" false
+set_grad "$GRADS_PHASE1"
+set_divturb "$DIV_TURB_PHASE1"
+echo ">>> Phase 0: solving 0 -> $SAFE_START (robust startup schemes)"
+mpirun -np "$NP" foamRun -parallel 2>&1 | tee log.foamRun.phase0
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "foamRun phase 0 failed. See log.foamRun.phase0."
+
+# --- Phase 1: SAFE_START -> AVG_START, production schemes, no averaging ------
+cd_entry endTime "$AVG_START"
+set_grad "$GRADS_PHASE2"
+set_divturb "$DIV_TURB_PHASE2"
+echo ">>> Phase 1: solving $SAFE_START -> $AVG_START (production schemes, averaging OFF)"
+mpirun -np "$NP" foamRun -parallel 2>&1 | tee log.foamRun.phase1
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "foamRun phase 1 failed. See log.foamRun.phase1."
+
+# --- Phase 2: AVG_START -> END, dense averaging ------------------------------
+cd_entry endTime "$END"
+cd_entry "functions/fieldAverage/enabled" true
+set_grad "$GRADS_PHASE2"
+set_divturb "$DIV_TURB_PHASE2"
+echo ">>> Phase 2: solving $AVG_START -> $END (averaging ON, grads: $GRADS_PHASE2)"
+mpirun -np "$NP" foamRun -parallel 2>&1 | tee log.foamRun.phase2
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "foamRun phase 2 failed. See log.foamRun.phase2."
+
+# --- reconstruct all times for ParaView --------------------------------------
+reconstructPar 2>&1 | tee log.reconstructPar
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "reconstructPar failed. See log.reconstructPar."
+
+# --- mean surface fields (Cp/Cf) + LSB locations -----------------------------
+postProcess -func sampleMeans -latestTime 2>&1 | tee log.sampleMeans
+[ "${PIPESTATUS[0]}" -eq 0 ] || die "sampleMeans failed. See log.sampleMeans."
+Uinf=$(foamDictionary 0/include/caseSettings -entry Uinf 2>/dev/null | awk '{print $2}' | tr -d ';')
+LSB_PY=$(find_up lsb.py) \
+  && python3 "$LSB_PY" . "${Uinf:-3}" 2>&1 | tee log.lsb \
+  || echo "(lsb.py not found above $PWD -- skipped)"
+
+echo
+echo "Done. Marker file: ${caseName}.foam"
+echo "Averaging window should be [$AVG_START, $END] -> totalTime = $((END - AVG_START)):"
+latest=$(foamListTimes | tail -1)
+grep -i totalTime "${latest}/uniform/fieldAverageProperties" 2>/dev/null | tail -2

@@ -1,0 +1,124 @@
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      fvModels;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+//  Strain-gated sustaining turbulence for kkLOmegaS (k-kL-omega).
+//
+//  IMPORTANT: this file is only honoured because the model is kkLOmegaS, the
+//  out-of-tree variant that calls fvModels.source() on its kt / kl / omega
+//  equations.  The STOCK kkLOmega never calls fvModels.source(), so with
+//  "model kkLOmega;" this file is silently ignored (OpenFOAM only emits a
+//  "defined for field kt but never used" note).  Check the model name if the
+//  freestream still decays.
+//
+//  Source magnitudes come from kkLOmega's OWN destruction terms, not SST's.
+//  In a uniform freestream (Pkt = 0, kl = 0, fw -> 1, Dt -> 0) the equations
+//  in kkLOmega.C reduce to
+//      d(kt)/dt    = -omega*kt        ->  P_kt_amb    = omega_amb*kt_amb
+//      d(omega)/dt = -Cw2*omega^2     ->  P_omega_amb = Cw2*omega_amb^2
+//  with Cw2 = 0.92.  (SST would use betaStar*k*omega and beta*omega^2 with
+//  betaStar = 0.09, beta = 0.0828 -- about 11x weaker in omega.  Reusing those
+//  here would under-sustain badly.)
+//
+//  Strain-rate switch, as in the lm / sst / ysst cases: activate ONLY where
+//  nu*S^2 < P_kt_amb, i.e. ON in the freestream (S ~ 0) and OFF inside the
+//  boundary layer (S large).  kkLOmega has no intermittency, so there is no
+//  gammaInt^3 factor here (that belongs to the lm and ysst forms).
+//
+//  kl is deliberately NOT sustained: laminar kinetic energy is a
+//  boundary-layer quantity, initialised to 0 in the freestream, so it has
+//  nothing to decay from.
+//
+//  All ambient values DERIVE from Tu in 0/include/caseSettings.
+//
+//  WHAT ELSE WAS TRIED, AND WHY IT IS NOT USED
+//
+//  1. NO STRAIN SWITCH (source active everywhere). Rejected: the ambient
+//     source then feeds the boundary layer as well as the freestream, which
+//     is precisely what it must not do. The switch confines it to regions
+//     where the real strain production is weaker than the ambient level.
+//
+//  2. KATO-LAUNDER limiter (Pk = nut*S*Omega) implemented as a coded fvModel,
+//     to curb stagnation-point over-production instead of tightening c1.
+//     Rejected: an fvModel can only ADD a source, so the correction had to be
+//     applied as an explicit NEGATIVE term. At the stagnation point that sink
+//     reached ~10x the k-equation's own destruction rate, drove k negative,
+//     and diverged (1546 k-bounding events, k min -76078 in one case). The
+//     failure is an artefact of the explicit additive formulation, not of
+//     Kato-Launder itself -- the published form replaces the production term
+//     inside the model, which is not reachable without editing source code.
+//     Menter's c1 limiter was used instead: it is a min() on a native,
+//     always-positive term and cannot produce this failure mode.
+//
+//  3. LOWERING ratioRef to reduce the ambient eddy viscosity. Rejected: it
+//     RAISES omega_amb (k_amb/nut_amb), and the omega-source goes as
+//     omega_amb^2. One trial gave |dCp| = 1.47 and a NEGATIVE drag.
+//
+//  Ambient values derive from Tu in 0/include/caseSettings -- a sweep is a
+//  single-line edit there, and nothing in this file needs touching.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include        "../0/include/caseSettings"
+
+sustainKt
+{
+    type            coded;
+    name            sustainKt;
+    field           kt;
+    cellZone        all;
+    codeInclude     #{ #include "fvcGrad.H" #};
+    codeAddSup
+    #{
+        const scalar nu       = $nuValue;
+        const scalar P_kt_amb = $PktAmb;      // = omega_amb*kt_amb
+
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+        tmp<volScalarField> tS = sqrt(2.0*magSqr(symm(fvc::grad(U))));  // S = sqrt(2 Sij Sij)
+        const volScalarField& S = tS();
+
+        const scalarField& V = mesh().V();
+        scalarField& src = eqn.source();
+        forAll(src, i)
+        {
+            if (nu*sqr(S[i]) < P_kt_amb)                  // freestream switch
+            {
+                src[i] -= P_kt_amb*V[i];
+            }
+        }
+    #};
+}
+
+sustainOmega
+{
+    type            coded;
+    name            sustainOmega;
+    field           omega;
+    cellZone        all;
+    codeInclude     #{ #include "fvcGrad.H" #};
+    codeAddSup
+    #{
+        const scalar nu        = $nuValue;
+        const scalar P_kt_amb  = $PktAmb;     // shared switch, same as kt
+        const scalar P_w_amb   = $PomegaAmb;  // = Cw2*omega_amb^2
+
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+        tmp<volScalarField> tS = sqrt(2.0*magSqr(symm(fvc::grad(U))));
+        const volScalarField& S = tS();
+
+        const scalarField& V = mesh().V();
+        scalarField& src = eqn.source();
+        forAll(src, i)
+        {
+            if (nu*sqr(S[i]) < P_kt_amb)                  // same condition
+            {
+                src[i] -= P_w_amb*V[i];
+            }
+        }
+    #};
+}
+
+// ************************************************************************* //
