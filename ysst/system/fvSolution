@@ -1,0 +1,115 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+//  Steady SIMPLEC, matching the kOmegaSSTLM (LM) reference case, with the
+//  gamma model's single transition field (gammaInt) added. Conservative 0.3
+//  relaxation — required for a stable cold start on this E387 LSB mesh.
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solvers
+{
+    // Pressure: symmetric matrix -> GAMG.  DIC smoother, NOT GaussSeidel:
+    // the GaussSeidel family SIGFPEs inside GAMGSolver::scale() on these meshes.
+    p
+    {
+        solver          GAMG;
+        smoother        DIC;
+        tolerance       1e-08;
+        relTol          0.001;
+        cacheAgglomeration true;
+        nCellsInCoarsestLevel 100;
+        mergeLevels     1;
+    }
+
+    // Asymmetric matrices -> PBiCGStab (stabilised Bi-CG; more robust and
+    // generally faster than plain PBiCG).  Settings below are identical across
+    // all cases; only the FIELD LIST differs, per model.
+    omega
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0;
+    }
+
+    "(U|k|gammaInt)"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-14;
+        relTol          0.0001;
+    }
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 2;
+    consistent          yes;
+
+    // WHY U IS 1e-07 AND EVERYTHING ELSE IS 1e-06
+    //
+    // residualControl is a TERMINATION rule only -- it changes when the run
+    // stops, never what it computes. It is NOT used here as the convergence
+    // test; see checkConv.py, which judges the stationarity of the integrated
+    // forces instead.
+    //
+    // WHAT WAS TRIED AND FAILED. With U at the original 1e-06 the criterion
+    // was unreliable in BOTH directions, because momentum residuals plateau on
+    // this flow -- the separation bubble is genuinely unsteady, so a steady
+    // solver cannot drive them below the level of the unsteadiness:
+    //   - a case whose forces were FLAT ran to endTime, never firing, because
+    //     Ux/Uy/k sat at ~3e-05, far above 1e-06;
+    //   - a case whose forces were still DRIFTING fired at 7648 iterations,
+    //     because every field happened to dip under 1e-06 on one iteration.
+    // The 1e-06 threshold sat right on the Uy noise floor (sweep-wide median
+    // ~4e-07), so whether a run stopped was close to arbitrary.
+    //
+    // WHY 1e-07 SPECIFICALLY. Calibrated, not guessed: across 109 converged
+    // cases the LOWEST Uy residual at the moment the force criterion was first
+    // met was 2.17e-07. Setting U below that makes "residualControl fired"
+    // imply "the forces are already stationary". 1e-07 leaves a 2.2x margin.
+    // U is the only useful discriminator -- it is the last field to converge.
+    //
+    // DO NOT tighten p or omega to match. omega is pinned at its own solver
+    // tolerance (1e-08) and measures nothing. p's first-solve residual (the
+    // one this test reads, before the non-orthogonal correctors) floors around
+    // 3e-05 in the median case, so p 1e-07 would be unsatisfiable in ~90% of
+    // cases and would disable the criterion for a bookkeeping reason rather
+    // than a physical one.
+    residualControl
+    {
+        p                1e-6;
+        U                1e-07;
+        "(k|omega|gammaInt)" 1e-6;
+    }
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p                0.3;
+    }
+
+    equations
+    {
+        U                0.3;
+        k                0.3;
+        omega            0.3;
+        gammaInt         0.3;
+    }
+}
+
+// ************************************************************************* //

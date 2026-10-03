@@ -1,0 +1,80 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+|  Tu-parameterised freestream settings  —  kOmegaSST, E387                    |
+|                                                                              |
+|  >>> CHANGE Tu (and, if needed, Uinf) IN THE "USER INPUT" BLOCK ONLY. <<<     |
+|  Everything below it is derived automatically, so a Tu sweep needs exactly   |
+|  ONE edit per case.                                                          |
+|                                                                              |
+|  Included by 0/k, 0/omega, 0/nut, 0/U  and  constant/fvModels               |
+\*---------------------------------------------------------------------------*/
+
+// ======================= USER INPUT ==========================================
+
+Tu              0.1;        // freestream turbulence intensity  [%]   <-- sweep knob
+Uinf            3;          // freestream velocity              [m/s]  (Re=200k @ c=1m)
+alpha           0;          // angle of attack [deg]   <-- SWEEP THIS
+nuValue         1.5e-5;     // kinematic viscosity              [m2/s]
+
+// Eddy-viscosity ratio is anchored, NOT fixed:  nut/nu = ratioRef*(Tu/TuRef).
+// This holds the freestream turbulent LENGTH SCALE constant across the sweep
+// (Lt = const  <=>  nut/nu ~ Tu), which is (a) physically consistent and
+// (b) essential for robustness: with a *fixed* nut/nu the ambient omega scales
+// as Tu^2, so the sustaining omega-source (~omega_amb^2) scales as Tu^4 and
+// detonates the cold start at high Tu.  Anchoring nut/nu ~ Tu keeps omega_amb
+// modest (45 at Tu=5% instead of 225), so a single-phase cold start is stable
+// at every Tu with NO limiter/continuation crutch.
+// Ref: Menter, Langtry & Voelker, Flow Turb. Combust. 77 (2006) 277-303
+//      (recommend nut/nu ~ 1-10 at inlet for external transition).
+ratioRef        10;         // nut/nu at the reference Tu
+TuRef           0.1;        // reference Tu  [%]   -> nut/nu = 1 at Tu=0.1%, 50 at Tu=5%
+
+// ======================= DERIVED — DO NOT EDIT ===============================
+
+nutRatio        #calc "${ratioRef}*${Tu}/${TuRef}";     // nut/nu = ratioRef*(Tu/TuRef)
+
+// turbulence intensity as a fraction
+TuFrac          #calc "${Tu}/100.0";
+
+// k = 3/2 (Uinf * Tu)^2       [scalar(...) forces FP so Foam::sqr is unambiguous]
+kInlet          #calc "1.5*Foam::sqr(scalar(${Uinf})*scalar(${TuFrac}))";
+
+// nut = (nut/nu) * nu
+nutInlet        #calc "${nutRatio}*${nuValue}";
+
+// omega = k / nut
+omegaInlet      #calc "${kInlet}/${nutInlet}";
+
+// freestream velocity vector
+// --- angle of attack ---------------------------------------------------------
+// The mesh is NOT rotated; the freestream vector is.  liftDir/dragDir must
+// rotate with it, because lift is perpendicular to the FREESTREAM, not to the
+// chord -- leaving them at (0 1 0)/(1 0 0) leaks lift into drag.
+// |Uinlet| == Uinf at every alpha, so kInlet/omegaInlet/nutInlet are unchanged.
+// scalar(...) is REQUIRED throughout: a #calc result landing on a whole number
+// (alpha=0 -> alphaRad=0, cosA=1, sinA=0) is written without a decimal point,
+// and Foam::cos(0) is then an ambiguous int overload -> compile error.
+alphaRad        #calc "scalar(${alpha})*constant::mathematical::pi/180.0";
+cosA            #calc "Foam::cos(scalar(${alphaRad}))";
+sinA            #calc "Foam::sin(scalar(${alphaRad}))";
+
+Uinlet          ( #calc "scalar(${Uinf})*scalar(${cosA})" #calc "scalar(${Uinf})*scalar(${sinA})" 0 );
+liftDirV        ( #calc "-scalar(${sinA})"                #calc "scalar(${cosA})"                 0 );
+dragDirV        ( #calc "scalar(${cosA})"                 #calc "scalar(${sinA})"                 0 );
+
+// --- Sustaining (ambient) source coefficients — Spalart & Rumsey 2007 --------
+//  constant/fvModels adds, in the freestream, a source equal to the SST
+//  destruction evaluated at the ambient values, cancelling freestream decay:
+//     k-eqn     : + betaStar * k_amb   * omega_amb      (= betaStar*k*omega)
+//     omega-eqn : + beta2    * omega_amb^2              (= beta*omega^2, F1->0)
+//  Ref: Spalart & Rumsey, AIAA J 45(10) 2007, 2544-2553.
+betaStar        0.09;       // SST k-destruction coefficient
+beta2           0.0828;     // SST omega-destruction coefficient (freestream, F1=0)
+
+// ---- Sanity check: values produced at each end of the sweep -----------------
+//   Tu=0.1% : nutRatio=1   kInlet=1.35e-05  nutInlet=1.5e-05  omega_amb=0.9
+//             P_k_amb=1.09e-06   P_w_amb=0.067
+//   Tu=5.0% : nutRatio=50  kInlet=0.03375   nutInlet=7.5e-04  omega_amb=45
+//             P_k_amb=0.137      P_w_amb=168   (vs 4192 under fixed nut/nu=10)
+// -----------------------------------------------------------------------------
+
+// ************************************************************************* //
