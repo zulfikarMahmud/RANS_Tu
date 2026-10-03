@@ -1,0 +1,102 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  13
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format          ascii;
+    class           dictionary;
+    location        "system";
+    object          controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solver          incompressibleFluid;
+
+startFrom       startTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         10000;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   500;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+
+writePrecision  6;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable true;
+
+functions
+{
+    wallShearStress
+    {
+        type            wallShearStress;
+        libs            ( "libfieldFunctionObjects.so" );
+        writeControl    writeTime;
+        patches         ( airfoil );
+    }
+    fieldAverage
+    {
+        type            fieldAverage;
+        libs            ( "libfieldFunctionObjects.so" );
+        writeControl    writeTime;
+        enabled         false;
+        restartOnRestart true;
+        fields          ( p { mean on ; prime2Mean off ; base time ; } U { mean on ; prime2Mean off ; base time ; } wallShearStress { mean on ; prime2Mean off ; base time ; } );
+    }
+    surfaces
+    {
+        type            surfaces;
+        libs            ( "libsampling.so" );
+        writeControl    writeTime;
+        surfaceFormat   raw;
+        interpolationScheme cell;
+        fields          ( p wallShearStress );
+        surfaces
+        {
+            airfoilSurf
+            {
+                type            patch;
+                patches         ( airfoil );
+                interpolate     false;
+            }
+        }
+    }
+    #includeFunc    forceCoeffs
+    yPlus
+    {
+        type            yPlus;
+        libs            ( "libfieldFunctionObjects.so" );
+        writeControl    writeTime;
+    }
+    upstreamProbe
+    {
+        type            probes;
+        libs            ( "libsampling.so" );
+        writeControl    timeStep;
+        writeInterval   100;
+        fields          ( U p k omega nut );
+        probeLocations  ( ( -0.5 0 0.5 ) ( -0.25 0 0.5 ) ( -0.1 0 0.5 ) ( 0.5 0.09 0.5 ) ( 2 0 0.5 ) );
+    }
+}
+
+
+// ************************************************************************* //
