@@ -53,6 +53,7 @@ ReThetatInlet   #calc "${Tu} <= 1.3 ? 1173.51 - 589.428*${Tu} + 0.2196/Foam::sqr
 // (alpha=0 -> alphaRad=0, cosA=1, sinA=0) is written without a decimal point,
 // and Foam::cos(0) is then an ambiguous int overload -> compile error.
 alphaRad        #calc "scalar(${alpha})*constant::mathematical::pi/180.0";
+// alphaRad        #calc "scalar(${alpha})*(M_PI/180.0)"; //uncomment this in case error related to constant is faced.
 cosA            #calc "Foam::cos(scalar(${alphaRad}))";
 sinA            #calc "Foam::sin(scalar(${alphaRad}))";
 
